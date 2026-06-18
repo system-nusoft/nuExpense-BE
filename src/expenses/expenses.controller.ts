@@ -14,7 +14,9 @@ import {
   HttpStatus,
   ParseIntPipe,
   DefaultValuePipe,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ExpensesService } from './expenses.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
@@ -76,6 +78,57 @@ export class ExpensesController {
       startDate,
       endDate,
     });
+  }
+
+  @Post('upload-receipt')
+  @UseInterceptors(
+    FileInterceptor('receipt', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic'];
+        if (allowed.includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new Error('Invalid file type. Only images are allowed.'), false);
+        }
+      },
+    }),
+  )
+  uploadReceipt(
+    @CurrentUser() user: AuthUser,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.expensesService.uploadReceipt(user.id, file);
+  }
+
+  @Get('summary/monthly')
+  getMonthlySummary(@CurrentUser() user: AuthUser) {
+    return this.expensesService.getMonthlySummary(user.id);
+  }
+
+  @Get('summary/categories')
+  getCategorySummary(
+    @CurrentUser() user: AuthUser,
+    @Query('month') month?: string,
+  ) {
+    const m =
+      month ?? new Date().toISOString().slice(0, 7); // default to current month
+    return this.expensesService.getCategorySummary(user.id, m);
+  }
+
+  @Get('export/csv')
+  async exportCsv(
+    @CurrentUser() user: AuthUser,
+    @Query('startDate') startDate: string | undefined,
+    @Query('endDate') endDate: string | undefined,
+    @Res() res: Response,
+  ) {
+    const csv = await this.expensesService.exportCsv(user.id, startDate, endDate);
+    const filename = `expenses-${new Date().toISOString().split('T')[0]}.csv`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
   }
 
   @Patch(':id')

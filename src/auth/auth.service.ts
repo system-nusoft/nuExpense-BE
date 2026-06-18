@@ -13,14 +13,14 @@ import { SignupDto } from './dto/signup.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 
 const DEFAULT_CATEGORIES = [
-  { name: 'Food & Dining', color: '#f59e0b', icon: 'utensils', sortOrder: 0 },
-  { name: 'Transport', color: '#3b82f6', icon: 'car', sortOrder: 1 },
-  { name: 'Shopping', color: '#ec4899', icon: 'shopping-bag', sortOrder: 2 },
-  { name: 'Bills & Utilities', color: '#8b5cf6', icon: 'zap', sortOrder: 3 },
-  { name: 'Entertainment', color: '#f97316', icon: 'film', sortOrder: 4 },
-  { name: 'Health', color: '#10b981', icon: 'heart', sortOrder: 5 },
-  { name: 'Travel', color: '#06b6d4', icon: 'plane', sortOrder: 6 },
-  { name: 'Other', color: '#6b7280', icon: 'more-horizontal', sortOrder: 7 },
+  { name: 'Food & Dining', color: '#f59e0b', icon: '🍽️', sortOrder: 0 },
+  { name: 'Transport', color: '#3b82f6', icon: '🚗', sortOrder: 1 },
+  { name: 'Shopping', color: '#ec4899', icon: '🛍️', sortOrder: 2 },
+  { name: 'Bills & Utilities', color: '#8b5cf6', icon: '⚡', sortOrder: 3 },
+  { name: 'Entertainment', color: '#f97316', icon: '🎬', sortOrder: 4 },
+  { name: 'Health', color: '#10b981', icon: '❤️', sortOrder: 5 },
+  { name: 'Travel', color: '#06b6d4', icon: '✈️', sortOrder: 6 },
+  { name: 'Other', color: '#6b7280', icon: '📦', sortOrder: 7 },
 ];
 
 export interface AuthTokens {
