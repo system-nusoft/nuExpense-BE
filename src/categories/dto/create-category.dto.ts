@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsHexColor, IsInt, Min } from 'class-validator';
+import { IsString, IsOptional, IsHexColor, IsInt, IsNumber, IsPositive, Min } from 'class-validator';
 
 export class CreateCategoryDto {
   @IsString()
@@ -16,4 +16,9 @@ export class CreateCategoryDto {
   @IsInt()
   @Min(0)
   sortOrder?: number;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive()
+  budgetAmount?: number;
 }

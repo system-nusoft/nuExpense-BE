@@ -35,6 +35,7 @@ export class CategoriesService {
         color: dto.color ?? '#6366f1',
         icon: dto.icon,
         sortOrder: dto.sortOrder ?? 0,
+        budgetAmount: dto.budgetAmount ?? null,
       },
     });
   }
@@ -58,6 +59,7 @@ export class CategoriesService {
         ...(dto.color !== undefined && { color: dto.color }),
         ...(dto.icon !== undefined && { icon: dto.icon }),
         ...(dto.sortOrder !== undefined && { sortOrder: dto.sortOrder }),
+        ...(dto.budgetAmount !== undefined && { budgetAmount: dto.budgetAmount }),
       },
     });
   }

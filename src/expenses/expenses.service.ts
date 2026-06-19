@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { AiService } from '../ai/ai.service';
+import { CurrencyService } from '../currency/currency.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { v4 as uuidv4 } from 'uuid';
@@ -30,6 +31,7 @@ export interface CategorySummaryItem {
   color: string;
   icon: string | null;
   total: number;
+  budgetAmount: number | null;
 }
 
 @Injectable()
@@ -38,6 +40,7 @@ export class ExpensesService {
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
     private readonly aiService: AiService,
+    private readonly currencyService: CurrencyService,
   ) {}
 
   async scan(userId: string, file: Express.Multer.File) {
@@ -75,7 +78,6 @@ export class ExpensesService {
   }
 
   async create(userId: string, dto: CreateExpenseDto) {
-    // Verify category belongs to user if provided
     if (dto.categoryId) {
       const cat = await this.prisma.category.findFirst({
         where: { id: dto.categoryId, userId },
@@ -92,17 +94,28 @@ export class ExpensesService {
       );
     }
 
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { homeCurrency: true },
+    });
+    const homeCurrency = user?.homeCurrency ?? 'USD';
+    const expenseCurrency = dto.currency ?? 'USD';
+    const rate = await this.currencyService.getRate(expenseCurrency, homeCurrency);
+    const homeCurrencyAmount = parseFloat(dto.amount.toString()) * rate;
+
     return this.prisma.expense.create({
       data: {
         userId,
         vendor: dto.vendor,
         amount: dto.amount,
-        currency: dto.currency ?? 'USD',
+        currency: expenseCurrency,
         date: new Date(dto.date),
         categoryId: dto.categoryId ?? null,
         receiptImageKey: dto.receiptImageKey ?? null,
         receiptImageUrl,
         notes: dto.notes ?? null,
+        homeCurrencyAmount,
+        homeCurrencyCode: homeCurrency,
       },
       include: {
         category: true,
@@ -161,7 +174,7 @@ export class ExpensesService {
   }
 
   async update(userId: string, id: string, dto: UpdateExpenseDto) {
-    await this.findOneOrThrow(userId, id);
+    const existing = await this.findOneOrThrow(userId, id);
 
     if (dto.categoryId) {
       const cat = await this.prisma.category.findFirst({
@@ -179,6 +192,21 @@ export class ExpensesService {
       );
     }
 
+    let homeCurrencyAmount: number | undefined;
+    let homeCurrencyCode: string | undefined;
+    if (dto.amount !== undefined || dto.currency !== undefined) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { homeCurrency: true },
+      });
+      const homeCurrency = user?.homeCurrency ?? 'USD';
+      const currencyToUse = dto.currency ?? existing.currency;
+      const amountToUse = dto.amount ?? parseFloat(existing.amount.toString());
+      const rate = await this.currencyService.getRate(currencyToUse, homeCurrency);
+      homeCurrencyAmount = amountToUse * rate;
+      homeCurrencyCode = homeCurrency;
+    }
+
     return this.prisma.expense.update({
       where: { id },
       data: {
@@ -192,6 +220,8 @@ export class ExpensesService {
         }),
         ...(receiptImageUrl !== undefined && { receiptImageUrl }),
         ...(dto.notes !== undefined && { notes: dto.notes }),
+        ...(homeCurrencyAmount !== undefined && { homeCurrencyAmount }),
+        ...(homeCurrencyCode !== undefined && { homeCurrencyCode }),
       },
       include: { category: true },
     });
@@ -222,7 +252,7 @@ export class ExpensesService {
     const rows = await this.prisma.$queryRaw<{ month: string; total: number; count: bigint }[]>`
       SELECT
         TO_CHAR(DATE_TRUNC('month', date), 'YYYY-MM') AS month,
-        SUM(amount)::float8 AS total,
+        SUM(COALESCE("homeCurrencyAmount", amount))::float8 AS total,
         COUNT(*) AS count
       FROM "Expense"
       WHERE "userId" = ${userId}
@@ -248,12 +278,12 @@ export class ExpensesService {
 
     const map = new Map<
       string,
-      { name: string; color: string; icon: string | null; total: number }
+      { name: string; color: string; icon: string | null; total: number; budgetAmount: number | null }
     >();
 
     for (const e of expenses) {
       const key = e.categoryId ?? '__none__';
-      const amount = parseFloat(e.amount.toString());
+      const amount = parseFloat((e.homeCurrencyAmount ?? e.amount).toString());
       const existing = map.get(key);
       if (existing) {
         existing.total += amount;
@@ -263,6 +293,9 @@ export class ExpensesService {
           color: e.category?.color ?? '#6B7280',
           icon: e.category?.icon ?? null,
           total: amount,
+          budgetAmount: e.category?.budgetAmount
+            ? parseFloat(e.category.budgetAmount.toString())
+            : null,
         });
       }
     }
@@ -301,7 +334,7 @@ export class ExpensesService {
 
     const escape = (v: unknown) =>
       `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const header = ['Date', 'Vendor', 'Amount', 'Currency', 'Category', 'Notes']
+    const header = ['Date', 'Vendor', 'Amount', 'Currency', 'Home Amount', 'Home Currency', 'Category', 'Notes']
       .map(escape)
       .join(',');
     const rows = expenses.map((e) =>
@@ -310,6 +343,8 @@ export class ExpensesService {
         e.vendor,
         e.amount.toString(),
         e.currency,
+        e.homeCurrencyAmount?.toString() ?? '',
+        e.homeCurrencyCode ?? '',
         e.category?.name ?? '',
         e.notes ?? '',
       ]
