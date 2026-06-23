@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { AiService } from '../ai/ai.service';
 import { CurrencyService } from '../currency/currency.service';
+import { normalizeVendor, vendorSimilarity } from './utils/vendor.utils';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { v4 as uuidv4 } from 'uuid';
@@ -343,8 +344,8 @@ export class ExpensesService {
         e.vendor,
         e.amount.toString(),
         e.currency,
-        e.homeCurrencyAmount?.toString() ?? '',
-        e.homeCurrencyCode ?? '',
+        e.homeCurrencyCode && e.homeCurrencyCode !== e.currency ? e.homeCurrencyAmount?.toString() ?? '' : '',
+        e.homeCurrencyCode && e.homeCurrencyCode !== e.currency ? e.homeCurrencyCode : '',
         e.category?.name ?? '',
         e.notes ?? '',
       ]
@@ -353,6 +354,115 @@ export class ExpensesService {
     );
 
     return [header, ...rows].join('\n');
+  }
+
+  async getMonthlyRecap(userId: string, month: string): Promise<{ recap: string }> {
+    const [year, mon] = month.split('-').map(Number);
+    const prevMonthDate = mon === 1
+      ? `${year - 1}-12`
+      : `${year}-${String(mon - 1).padStart(2, '0')}`;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { homeCurrency: true },
+    });
+    const homeCurrency = user?.homeCurrency ?? 'USD';
+
+    const [current, prev] = await Promise.all([
+      this.getMonthlySummary(userId).then((rows) => rows.find((r) => r.month === month)),
+      this.getMonthlySummary(userId).then((rows) => rows.find((r) => r.month === prevMonthDate)),
+    ]);
+
+    if (!current || current.total === 0) {
+      return { recap: 'No expenses recorded for this month yet.' };
+    }
+
+    const categories = await this.getCategorySummary(userId, month);
+    const categoryCtx = categories.map((c) => ({
+      name: c.name,
+      total: c.total,
+      percentage: current.total > 0 ? (c.total / current.total) * 100 : 0,
+      budgetAmount: c.budgetAmount,
+    }));
+
+    const recap = await this.aiService.generateRecap({
+      month,
+      homeCurrency,
+      total: current.total,
+      count: current.count,
+      categories: categoryCtx,
+      prevMonth: prevMonthDate,
+      prevTotal: prev?.total ?? 0,
+      prevCount: prev?.count ?? 0,
+    });
+
+    return { recap };
+  }
+
+  async getVendorInsights(userId: string): Promise<
+    { name: string; count: number; total: number; average: number; lastDate: string }[]
+  > {
+    const since = new Date();
+    since.setMonth(since.getMonth() - 12);
+
+    const expenses = await this.prisma.expense.findMany({
+      where: { userId, date: { gte: since } },
+      select: {
+        vendor: true,
+        homeCurrencyAmount: true,
+        amount: true,
+        date: true,
+      },
+      orderBy: { date: 'desc' },
+    });
+
+    // Groups: { normalizedKey, canonicalName, entries[] }
+    const groups: {
+      normalizedKey: string;
+      names: string[];
+      total: number;
+      dates: Date[];
+    }[] = [];
+
+    for (const e of expenses) {
+      const normalized = normalizeVendor(e.vendor);
+      const amount = parseFloat((e.homeCurrencyAmount ?? e.amount).toString());
+
+      const match = groups.find(
+        (g) => vendorSimilarity(g.normalizedKey, normalized) >= 0.8,
+      );
+
+      if (match) {
+        match.names.push(e.vendor);
+        match.total += amount;
+        match.dates.push(e.date);
+      } else {
+        groups.push({
+          normalizedKey: normalized,
+          names: [e.vendor],
+          total: amount,
+          dates: [e.date],
+        });
+      }
+    }
+
+    return groups
+      .map((g) => {
+        // canonical name = most frequent original name in the group
+        const freq = new Map<string, number>();
+        for (const n of g.names) freq.set(n, (freq.get(n) ?? 0) + 1);
+        const canonical = [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        const count = g.names.length;
+        return {
+          name: canonical,
+          count,
+          total: g.total,
+          average: g.total / count,
+          lastDate: g.dates[0].toISOString().split('T')[0],
+        };
+      })
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
   }
 
   private async findOneOrThrow(userId: string, id: string) {

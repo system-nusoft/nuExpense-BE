@@ -131,6 +131,20 @@ export class ExpensesController {
     res.send(csv);
   }
 
+  @Get('recap')
+  getMonthlyRecap(
+    @CurrentUser() user: AuthUser,
+    @Query('month') month?: string,
+  ) {
+    const m = month ?? new Date().toISOString().slice(0, 7);
+    return this.expensesService.getMonthlyRecap(user.id, m);
+  }
+
+  @Get('vendors/insights')
+  getVendorInsights(@CurrentUser() user: AuthUser) {
+    return this.expensesService.getVendorInsights(user.id);
+  }
+
   @Patch(':id')
   update(
     @CurrentUser() user: AuthUser,

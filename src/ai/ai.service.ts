@@ -2,6 +2,17 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Groq from 'groq-sdk';
 
+export interface RecapContext {
+  month: string;
+  homeCurrency: string;
+  total: number;
+  count: number;
+  categories: { name: string; total: number; percentage: number; budgetAmount: number | null }[];
+  prevMonth: string;
+  prevTotal: number;
+  prevCount: number;
+}
+
 export interface ReceiptAnalysisResult {
   vendor: string;
   amount: number;
@@ -107,5 +118,53 @@ Rules:
         rawText: responseText,
       };
     }
+  }
+
+  async generateRecap(ctx: RecapContext): Promise<string> {
+    const fmt = (n: number) =>
+      new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
+
+    const monthLabel = new Date(`${ctx.month}-01`).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    const prevMonthLabel = new Date(`${ctx.prevMonth}-01`).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+    const categoryLines = ctx.categories
+      .map((c) => {
+        const budgetNote = c.budgetAmount
+          ? c.total > c.budgetAmount
+            ? ` (OVER budget of ${ctx.homeCurrency} ${fmt(c.budgetAmount)})`
+            : ` (budget: ${ctx.homeCurrency} ${fmt(c.budgetAmount)}, ${Math.round((c.total / c.budgetAmount) * 100)}% used)`
+          : '';
+        return `- ${c.name}: ${ctx.homeCurrency} ${fmt(c.total)} (${c.percentage.toFixed(1)}%)${budgetNote}`;
+      })
+      .join('\n');
+
+    const changeNote = ctx.prevTotal > 0
+      ? `${ctx.total > ctx.prevTotal ? '+' : ''}${(((ctx.total - ctx.prevTotal) / ctx.prevTotal) * 100).toFixed(1)}% vs ${prevMonthLabel} (${ctx.homeCurrency} ${fmt(ctx.prevTotal)}, ${ctx.prevCount} expenses)`
+      : `No data for ${prevMonthLabel}`;
+
+    const prompt = `You are a personal finance assistant. Write a concise 3-4 sentence monthly spending recap based on this data.
+
+Month: ${monthLabel}
+Home currency: ${ctx.homeCurrency}
+Total spent: ${ctx.homeCurrency} ${fmt(ctx.total)} across ${ctx.count} expense${ctx.count !== 1 ? 's' : ''}
+Month-over-month: ${changeNote}
+
+Category breakdown:
+${categoryLines}
+
+Rules:
+- Be specific with numbers and percentages
+- Mention notable changes vs last month
+- Call out any over-budget categories
+- No greeting, no sign-off, no markdown — plain text only
+- Maximum 4 sentences`;
+
+    const completion = await this.client.chat.completions.create({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      max_tokens: 256,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    return completion.choices[0]?.message?.content?.trim() ?? 'Unable to generate recap.';
   }
 }
